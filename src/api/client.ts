@@ -136,6 +136,9 @@ export const api = {
     });
   },
 
+  retranscribeSample: (sampleId: string) =>
+    request<Sample>(`/api/samples/${sampleId}/transcribe`, { method: 'POST' }),
+
   deleteSample: (sampleId: string) =>
     request<DeleteSampleResponse>(`/api/samples/${sampleId}`, { method: 'DELETE' }),
 

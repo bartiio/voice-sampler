@@ -262,6 +262,27 @@ def update_sample(sample_id: str, req: UpdateTranscriptRequest):
     return formatted
 
 
+@router.post("/{sample_id}/transcribe", response_model=SampleResponse)
+def retranscribe_sample(sample_id: str):
+    """
+    Trigger or re-run automatic Whisper transcription on an existing sample.
+    Resets status to 'pending' and enqueues transcription in the background pool.
+    """
+    existing = repository.get_sample(sample_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Sample not found")
+
+    file_path = existing.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=400, detail="Audio file not found on disk")
+
+    updated = repository.update_sample(sample_id, transcript_status="pending")
+    whisper_service = get_whisper_service()
+    whisper_service.enqueue_transcription(sample_id, audio_path=file_path)
+
+    return _format_sample(updated or existing)
+
+
 @router.delete("", response_model=BulkDeleteResponse)
 def bulk_delete_samples(
     only_missing: bool = Query(False, description="If True, only deletes samples whose files do not exist")

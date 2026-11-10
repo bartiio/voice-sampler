@@ -30,6 +30,19 @@ from backend.app.services.notification_service import get_notification_manager
 
 logger = logging.getLogger("voice_sampler.whisper_service")
 
+# Monkey-patch av.open for PyAV 14+ compatibility (strips removed 'metadata_errors' param)
+try:
+    import av
+    _orig_av_open = av.open
+
+    def _safe_av_open(*args, **kwargs):
+        kwargs.pop("metadata_errors", None)
+        return _orig_av_open(*args, **kwargs)
+
+    av.open = _safe_av_open
+except Exception:
+    pass
+
 # Polish initial prompt to condition Whisper decoder against ASCII-flattening
 INITIAL_POLISH_PROMPT = (
     "To jest nagranie w języku polskim z poprawną polską pisownią "
@@ -165,6 +178,19 @@ class FasterWhisperEngine(BaseWhisperEngine):
         )
 
         texts = [s.text.strip() for s in segments if s.text and s.text.strip()]
+        if not texts:
+            # Fallback without VAD filter in case audio has low gain or subtle speech
+            segments_novad, _ = self._model.transcribe(
+                path_str,
+                language=language,
+                task="transcribe",
+                beam_size=5,
+                temperature=0.0,
+                vad_filter=False,
+                initial_prompt=INITIAL_POLISH_PROMPT,
+            )
+            texts = [s.text.strip() for s in segments_novad if s.text and s.text.strip()]
+
         result = " ".join(texts)
         return unicodedata.normalize("NFC", result.strip())
 
@@ -294,7 +320,6 @@ class WhisperService:
     def _check_sim_flag(self) -> bool:
         return (
             self.settings.simulation_mode
-            or self.settings.dev_mode
             or os.getenv("VOICE_SAMPLER_SIMULATION_MODE", "0").lower() in ("1", "true", "yes")
             or os.getenv("VOICE_SAMPLER_FORCE_MOCK", "0").lower() in ("1", "true", "yes")
         )

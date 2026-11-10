@@ -6,6 +6,7 @@ import { WaveformVisualizer } from '../components/WaveformVisualizer';
 import { StatusBadge } from '../components/StatusBadge';
 import { AudioPlayer } from '../components/AudioPlayer';
 import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
+import { TranscriptVerificationModal } from '../components/TranscriptVerificationModal';
 
 const POLISH_DIACRITICS = ['ą', 'ć', 'ę', 'ł', 'ń', 'ó', 'ś', 'ź', 'ż'];
 const POLISH_DIACRITICS_UPPER = ['Ą', 'Ć', 'Ę', 'Ł', 'Ń', 'Ó', 'Ś', 'Ź', 'Ż'];
@@ -45,6 +46,25 @@ export const SamplesView: React.FC = () => {
   const [deleteTarget, setDeleteTarget] = useState<Sample | null>(null);
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState<boolean>(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState<boolean>(false);
+
+  // Transcript Verification Modal State
+  const [inspectingSample, setInspectingSample] = useState<Sample | null>(null);
+
+  // Expandable Table Transcripts State
+  const [expandedTranscriptIds, setExpandedTranscriptIds] = useState<Set<string>>(new Set());
+
+  const toggleExpandTranscript = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setExpandedTranscriptIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   // 1. Initial Load & Fetch Samples
   const loadSamples = useCallback(async () => {
@@ -94,6 +114,11 @@ export const SamplesView: React.FC = () => {
             setSamples((prev) =>
               prev.map((s) => (s.id === payload.sample_id ? { ...s, status: 'transcribing' } : s))
             );
+            setInspectingSample((current) =>
+              current && current.id === payload.sample_id
+                ? { ...current, status: 'transcribing' }
+                : current
+            );
             break;
 
           case 'transcription_completed':
@@ -110,11 +135,27 @@ export const SamplesView: React.FC = () => {
                   : s
               )
             );
+            setInspectingSample((current) =>
+              current && current.id === payload.sample_id
+                ? {
+                    ...current,
+                    status: 'transcribed',
+                    transcript: payload.transcript,
+                    duration: payload.duration > 0 ? payload.duration : current.duration,
+                    duration_seconds: payload.duration > 0 ? payload.duration : current.duration_seconds,
+                  }
+                : current
+            );
             break;
 
           case 'transcription_failed':
             setSamples((prev) =>
               prev.map((s) => (s.id === payload.sample_id ? { ...s, status: 'error' } : s))
+            );
+            setInspectingSample((current) =>
+              current && current.id === payload.sample_id
+                ? { ...current, status: 'error' }
+                : current
             );
             break;
 
@@ -126,10 +167,16 @@ export const SamplesView: React.FC = () => {
                   : s
               )
             );
+            setInspectingSample((current) =>
+              current && current.id === payload.sample_id
+                ? { ...current, transcript: payload.transcript, status: payload.status as any }
+                : current
+            );
             break;
 
           case 'sample_deleted':
             setSamples((prev) => prev.filter((s) => s.id !== payload.sample_id));
+            setInspectingSample((current) => (current && current.id === payload.sample_id ? null : current));
             break;
         }
       }
@@ -585,7 +632,7 @@ export const SamplesView: React.FC = () => {
                   <th scope="col" className="py-3.5 px-4 min-w-[320px]">Transcript (Polish Whisper)</th>
                   <th scope="col" className="py-3.5 px-4 w-32">Status</th>
                   <th scope="col" className="py-3.5 px-4 w-32">Added</th>
-                  <th scope="col" className="py-3.5 px-4 w-20 text-center">Actions</th>
+                  <th scope="col" className="py-3.5 px-4 w-28 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-sm">
@@ -703,24 +750,78 @@ export const SamplesView: React.FC = () => {
                             </div>
                           </div>
                         ) : (
-                          <div
-                            onClick={() => startEditingTranscript(sample)}
-                            className="group cursor-pointer rounded-lg p-2.5 -m-2 hover:bg-slate-800/60 transition-colors"
-                            title="Click to edit transcript"
-                          >
-                            <p className="text-sm text-slate-200 leading-relaxed font-normal">
-                              {sample.transcript ? (
-                                sample.transcript
-                              ) : (
-                                <span className="text-slate-500 italic">No transcript available (click to add).</span>
-                              )}
-                            </p>
-                            <span className="opacity-0 group-hover:opacity-100 text-xs text-indigo-400 mt-1 inline-flex items-center gap-1 transition-opacity">
-                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                              </svg>
-                              Click to edit
-                            </span>
+                          <div className="flex flex-col gap-1.5">
+                            {(() => {
+                              const isExpanded = expandedTranscriptIds.has(sample.id);
+                              const textLen = (sample.transcript || '').length;
+                              const isLong = textLen > 110;
+
+                              return (
+                                <>
+                                  <div
+                                    onClick={() => startEditingTranscript(sample)}
+                                    className="group cursor-pointer rounded-lg p-2.5 -m-2 hover:bg-slate-800/60 transition-colors"
+                                    title="Kliknij, aby edytować tekst w wierszu"
+                                  >
+                                    <p
+                                      className={`text-sm text-slate-200 leading-relaxed font-normal transition-all ${
+                                        !isExpanded && isLong ? 'line-clamp-2 max-h-12 overflow-hidden' : 'max-h-96 overflow-y-auto'
+                                      }`}
+                                    >
+                                      {sample.transcript ? (
+                                        sample.transcript
+                                      ) : (
+                                        <span className="text-slate-500 italic">Brak transkrypcji (kliknij aby edytować).</span>
+                                      )}
+                                    </p>
+                                    <span className="opacity-0 group-hover:opacity-100 text-[11px] text-indigo-400 mt-1 inline-flex items-center gap-1 transition-opacity">
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                      </svg>
+                                      Edytuj w wierszu
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                                    {isLong && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => toggleExpandTranscript(sample.id, e)}
+                                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 transition-colors py-0.5"
+                                      >
+                                        {isExpanded ? (
+                                          <>
+                                            <svg className="w-3 h-3 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
+                                            </svg>
+                                            <span>Zwiń tekst</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <svg className="w-3 h-3 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                                            </svg>
+                                            <span>Rozwiń tekst ({textLen} znaków)</span>
+                                          </>
+                                        )}
+                                      </button>
+                                    )}
+
+                                    <button
+                                      type="button"
+                                      onClick={() => setInspectingSample(sample)}
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-indigo-300 bg-indigo-950/50 hover:bg-indigo-900/60 border border-indigo-800/50 transition-colors"
+                                    >
+                                      <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                      </svg>
+                                      <span>Weryfikuj i odsłuchaj</span>
+                                    </button>
+                                  </div>
+                                </>
+                              );
+                            })()}
                           </div>
                         )}
                       </td>
@@ -738,18 +839,34 @@ export const SamplesView: React.FC = () => {
                         </div>
                       </td>
 
-                      {/* Delete Action */}
+                      {/* Actions */}
                       <td className="py-4 px-4 align-top text-center">
-                        <button
-                          type="button"
-                          onClick={() => setDeleteTarget(sample)}
-                          aria-label={`Delete ${sample.filename}`}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-950/40 transition-colors"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                          </svg>
-                        </button>
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setInspectingSample(sample)}
+                            aria-label={`Weryfikuj transkrypcję ${sample.filename}`}
+                            className="p-1.5 rounded-lg text-indigo-400 hover:text-indigo-200 hover:bg-indigo-950/60 border border-indigo-900/40 transition-colors"
+                            title="Otwórz okno weryfikacji transkrypcji"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setDeleteTarget(sample)}
+                            aria-label={`Delete ${sample.filename}`}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-950/40 transition-colors"
+                            title="Usuń próbkę"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -836,6 +953,17 @@ export const SamplesView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Transcript Verification Modal */}
+      <TranscriptVerificationModal
+        isOpen={inspectingSample !== null}
+        sample={inspectingSample}
+        onClose={() => setInspectingSample(null)}
+        onSampleUpdated={(updated) => {
+          setSamples((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+          setInspectingSample(updated);
+        }}
+      />
     </div>
   );
 };
